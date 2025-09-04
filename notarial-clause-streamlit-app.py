@@ -810,9 +810,7 @@ Ensure the clause is complete, clear, and professionally written in Dutch."""
 
 # ============= STREAMLIT UI FUNCTIONS =============
 
-def main():
-    
-    # Add this at the beginning of your main() function:
+ # Add this at the beginning of your main() function:
 def check_password():
     """Returns `True` if the user had the correct password."""
     def password_entered():
@@ -839,6 +837,11 @@ def check_password():
     else:
         # Password correct
         return True
+
+def main():
+    
+     """Main function to run the Streamlit app"""
+    st.title("🏛️ Notariële Clausule Processor")
 
 # In your main() function:
 if not check_password():

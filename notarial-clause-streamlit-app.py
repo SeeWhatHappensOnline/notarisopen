@@ -839,10 +839,6 @@ def check_password():
         return True
 
 def main():
-    
-     """Main function to run the Streamlit app"""
-    st.title("🏛️ Notariële Clausule Processor")
-
 # In your main() function:
 if not check_password():
     st.stop()  # Do not continue if check_password is not True

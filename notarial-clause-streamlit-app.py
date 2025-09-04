@@ -840,11 +840,11 @@ def check_password():
 
 def main():
 # In your main() function:
-if not check_password():
-    st.stop()  # Do not continue if check_password is not True
+    if not check_password():
+        st.stop()  # Do not continue if check_password is not True
     
-    st.title("🏛️ Notariële Clausule Processor")
-    st.markdown("Automatische verwerking van notariële clausules met AI")
+        st.title("🏛️ Notariële Clausule Processor")
+        st.markdown("Automatische verwerking van notariële clausules met AI")
     
     # Sidebar for navigation
     with st.sidebar:

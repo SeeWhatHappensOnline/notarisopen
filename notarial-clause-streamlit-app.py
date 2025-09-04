@@ -870,7 +870,7 @@ def main():
         progress_items = [
             ("Intake compleet", bool(st.session_state.notarial_info)),
             ("Documenten geladen", bool(st.session_state.source_content)),
-            ("CSV geüpload", bool(st.session_state.csv_data)),
+            ("CSV geüpload", st.session_state.csv_data is not None),
             (f"Clausules verwerkt ({len(st.session_state.processed_clauses)})", 
              len(st.session_state.processed_clauses) > 0)
         ]

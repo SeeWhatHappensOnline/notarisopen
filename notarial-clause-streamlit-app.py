@@ -122,7 +122,7 @@ def get_dutch_month(month_num):
 
 def extract_info_from_documents(source_content):
     """Use Gemini to extract notarial information from source documents"""
-    model = genai.GenerativeModel('gemini-1.5-pro')
+    model = genai.GenerativeModel('gemini-2.5-flash-lite')
     
     extraction_prompt = """
     Analyseer de volgende documenten en extraheer alle relevante notariële informatie.
@@ -1195,7 +1195,7 @@ def show_clause_processor():
                 st.text_area("", value=content, height=200, key=f"processed_{clause_name}")
 
 def process_clause_workflow():
-    """Handle the multi-stage clause processing workflow"""
+    """Handle the multi-stage clause processing workflow with proper feedback display"""
     state = st.session_state.processing_state
     
     if not state:
@@ -1214,8 +1214,8 @@ def process_clause_workflow():
     elif 'skip_conditions' in row:
         skip_conditions = row.get('skip_conditions', '')
     
-    # Initialize model
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    # Initialize model with correct version
+    model = genai.GenerativeModel('gemini-2.0-flash-exp')
     
     # Stage 1: Applicability Check
     if state['stage'] == 'applicability':
@@ -1237,8 +1237,28 @@ def process_clause_workflow():
                     model
                 )
             
-            # Show analysis
-            with st.expander("📋 Applicability Analyse", expanded=True):
+            # Show detailed analysis in structured format
+            st.subheader("⚖️ Applicability Agent Analyse")
+            
+            # Parse the analysis to show structured output
+            if "FINALE BESLISSING:" in analysis:
+                # Extract key parts
+                lines = analysis.split('\n')
+                for line in lines:
+                    if "CLAUSULE:" in line:
+                        st.write(f"**{line.strip()}**")
+                    elif "CATEGORIE:" in line:
+                        st.info(line.strip())
+                    elif "FINALE BESLISSING:" in line:
+                        if "JA" in line:
+                            st.error(f"🚫 {line.strip()}")
+                        else:
+                            st.success(f"✅ {line.strip()}")
+                    elif "REDENERING:" in line:
+                        st.write(f"**{line.strip()}**")
+            
+            # Show full analysis in expander
+            with st.expander("📋 Volledige Analyse", expanded=False):
                 st.text(analysis)
             
             st.warning(f"De AI adviseert: {'Clausule MAG verwijderd worden' if may_skip else 'Clausule MOET behouden blijven'}")
@@ -1263,25 +1283,52 @@ def process_clause_workflow():
             )
             state['research_data'] = research_data
         
-        # Show research results
+        # Show detailed research results
         st.success("✅ Research compleet!")
+        st.subheader("🔬 Research Agent Resultaten")
         
-        col1, col2 = st.columns(2)
+        # Show the applicable scenario prominently
+        if research_data.get('applicable_scenario') and research_data['applicable_scenario'] != 'Unknown':
+            st.info(f"**📍 Applicable Scenario:** {research_data['applicable_scenario']}")
+        
+        # Show research summary
+        if research_data.get('research_summary'):
+            with st.expander("📝 Research Summary", expanded=True):
+                st.write(research_data['research_summary'])
+        
+        # Show metrics
+        col1, col2, col3 = st.columns(3)
         with col1:
-            st.metric("Gevonden informatie", len(research_data.get('found_information', {})))
+            st.metric("🎯 Required Info", len(research_data.get('required_information', [])))
         with col2:
-            st.metric("Ontbrekende informatie", len(research_data.get('missing_information', [])))
+            st.metric("✅ Found Info", len(research_data.get('found_information', {})))
+        with col3:
+            st.metric("❌ Missing Info", len(research_data.get('missing_information', [])))
         
-        with st.expander("🔍 Research Details"):
-            st.write("**Samenvatting:**", research_data.get('research_summary', 'N/A'))
-            st.write("**Applicable Scenario:**", research_data.get('applicable_scenario', 'N/A'))
-            
-            if research_data.get('found_information'):
-                st.write("**Gevonden informatie:**")
+        # Show found information details
+        if research_data.get('found_information'):
+            with st.expander("✅ Gevonden Informatie", expanded=True):
                 for key, info in research_data['found_information'].items():
-                    st.write(f"- {key}: {info['value']} (confidence: {info['confidence']})")
+                    col1, col2 = st.columns([2, 1])
+                    with col1:
+                        st.write(f"**{key}:** {info['value']}")
+                    with col2:
+                        confidence_color = "green" if info['confidence'] == 'HIGH' else "orange" if info['confidence'] == 'MEDIUM' else "red"
+                        st.markdown(f"<span style='color: {confidence_color}'>Confidence: {info['confidence']}</span>", unsafe_allow_html=True)
+                    
+                    if info.get('source_quote'):
+                        st.caption(f"📖 Bron: \"{info['source_quote'][:100]}...\"")
+        
+        # Show missing information details
+        if research_data.get('missing_information'):
+            with st.expander("❌ Ontbrekende Informatie", expanded=True):
+                for item in research_data['missing_information']:
+                    st.write(f"• **{item['item']}** - {item['required_for']}")
+                    if item.get('searched_terms'):
+                        st.caption(f"  Gezocht naar: {', '.join(item['searched_terms'])}")
         
         state['stage'] = 'review'
+        time.sleep(1)  # Give user time to see results
         st.rerun()
     
     # Stage 3: Review
@@ -1292,10 +1339,31 @@ def process_clause_workflow():
             )
             state['review_result'] = review_result
         
-        st.info("📊 Review Analyse compleet")
+        st.subheader("📊 Review Agent Analyse")
         
+        # Show review analysis
+        if review_result.get('analysis'):
+            st.info(f"**Analyse:** {review_result['analysis']}")
+        
+        # Show what was already found
+        if review_result.get('already_found'):
+            with st.expander("✅ Reeds gevonden informatie", expanded=False):
+                for item in review_result['already_found']:
+                    st.write(f"• {item}")
+        
+        # Show what's not applicable
+        if review_result.get('not_applicable_info'):
+            with st.expander("ℹ️ Niet van toepassing voor dit scenario", expanded=False):
+                for item in review_result['not_applicable_info']:
+                    st.write(f"• {item}")
+        
+        # Show critical missing info
         if review_result.get('critical_missing'):
-            st.warning(f"❓ Er zijn {len(review_result['critical_missing'])} vragen voor u")
+            st.warning(f"❓ Er zijn {len(review_result['critical_missing'])} kritieke informatie items nodig")
+            with st.expander("🔍 Kritieke ontbrekende informatie", expanded=True):
+                for item in review_result['critical_missing']:
+                    st.write(f"• **{item}**")
+            
             state['questions'] = review_result.get('questions_for_user', [])
             state['current_question_index'] = 0
             state['stage'] = 'questions'
@@ -1303,10 +1371,12 @@ def process_clause_workflow():
             st.success("✅ Alle benodigde informatie is beschikbaar!")
             state['stage'] = 'generation'
         
+        time.sleep(1)  # Give user time to see results
         st.rerun()
     
-    # Stage 4: Questions
+    # Stage 4: Questions (keep existing implementation)
     elif state['stage'] == 'questions':
+        # ... (keep existing question handling code)
         if state['current_question_index'] < len(state['questions']):
             current_q = state['questions'][state['current_question_index']]
             
@@ -1326,6 +1396,7 @@ def process_clause_workflow():
                 for item_key, item_data in focused_result['found_items'].items():
                     if item_data.get('found') and item_data.get('value'):
                         st.success(f"✅ Automatisch gevonden: {item_data['value']}")
+                        st.caption(f"📍 Gevonden in: {item_data.get('location', 'N/A')}")
                         
                         # Store the answer
                         answer_key = f"{clause_type}_{current_q['missing_info']}"
@@ -1343,9 +1414,13 @@ def process_clause_workflow():
                         
                         found_automatically = True
                         state['current_question_index'] += 1
+                        time.sleep(1)  # Show result briefly
                         st.rerun()
             
             if not found_automatically:
+                # Show search attempted but failed
+                st.info("🔍 Automatisch zoeken leverde geen resultaat op. Handmatige invoer vereist.")
+                
                 # Ask user
                 st.warning(f"**{current_q['missing_info']}**")
                 st.write(current_q['question'])
@@ -1369,7 +1444,8 @@ def process_clause_workflow():
                             "question": current_q['question'],
                             "answer": selected_option,
                             "missing_info": current_q['missing_info'],
-                            "clause_type": clause_type
+                            "clause_type": clause_type,
+                            "source": "manual_input"
                         }
                         
                         state['current_question_index'] += 1
@@ -1386,7 +1462,8 @@ def process_clause_workflow():
                             "question": current_q['question'],
                             "answer": answer,
                             "missing_info": current_q['missing_info'],
-                            "clause_type": clause_type
+                            "clause_type": clause_type,
+                            "source": "manual_input"
                         }
                         
                         state['current_question_index'] += 1
@@ -1400,12 +1477,22 @@ def process_clause_workflow():
     elif state['stage'] == 'generation':
         st.info("📝 Genereren van clausule...")
         
+        # Show what information will be used
+        st.subheader("🔧 Compilatie van informatie")
+        
         # Get user answers for this clause
         clause_user_answers = {}
         if 'user_answers' in st.session_state.notarial_info:
             for key, value in st.session_state.notarial_info['user_answers'].items():
                 if key.startswith(f"{clause_type}_"):
                     clause_user_answers[key] = value
+        
+        # Display info being used
+        col1, col2 = st.columns(2)
+        with col1:
+            st.metric("📊 Research info items", len(state['research_data'].get('found_information', {})))
+        with col2:
+            st.metric("👤 User provided items", len(clause_user_answers))
         
         # Create complete information set
         with st.spinner("🔧 Compileren van informatie..."):
@@ -1432,6 +1519,15 @@ def process_clause_workflow():
                             "confidence": data.get('confidence', 'HIGH')
                         }
         
+        # Show compilation results
+        if complete_info.get('compilation_notes'):
+            st.info(f"📝 {complete_info['compilation_notes']}")
+        
+        if complete_info.get('excluded_conditions'):
+            with st.expander("🚫 Excluded Conditions"):
+                for condition in complete_info['excluded_conditions']:
+                    st.write(f"• {condition}")
+        
         # Generate final clause
         with st.spinner("✍️ Genereren van finale clausule..."):
             final_clause = generate_final_clause(
@@ -1447,10 +1543,19 @@ def process_clause_workflow():
         # Store the result
         st.session_state.processed_clauses[state['clause_name']] = final_clause
         
-        # Show the result
-        st.text_area("Gegenereerde Clausule:", value=final_clause, height=300)
+        # Show the result with syntax highlighting
+        st.subheader("📄 Gegenereerde Clausule")
+        st.text_area("", value=final_clause, height=300, key="generated_clause")
+        
+        # Option to edit
+        if st.checkbox("✏️ Clausule bewerken"):
+            edited_clause = st.text_area("Bewerk de clausule:", value=final_clause, height=300, key="edit_clause")
+            if st.button("💾 Wijzigingen opslaan"):
+                st.session_state.processed_clauses[state['clause_name']] = edited_clause
+                st.success("✅ Wijzigingen opgeslagen!")
         
         state['stage'] = 'complete'
+        time.sleep(1)
         st.rerun()
     
     # Stage 6: Complete
@@ -1459,12 +1564,24 @@ def process_clause_workflow():
             st.info("⏭️ Clausule overgeslagen op gebruikersbeslissing")
         else:
             st.success(f"✅ Clausule '{state['clause_name']}' verwerkt en opgeslagen!")
+            
+            # Show summary of what was processed
+            with st.expander("📊 Verwerkingssamenvatting"):
+                st.write(f"**Clausule:** {state['clause_name']}")
+                st.write(f"**Applicable Scenario:** {state.get('research_data', {}).get('applicable_scenario', 'N/A')}")
+                st.write(f"**Gebruikersbeslissing:** {'Toegepast' if state['user_decision'] == 'apply' else 'Overgeslagen'}")
         
         # Clear processing state
         st.session_state.processing_state = {}
         
-        if st.button("🔄 Volgende Clausule Verwerken"):
-            st.rerun()
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("🔄 Volgende Clausule Verwerken", type="primary"):
+                st.rerun()
+        with col2:
+            if st.button("💾 Ga naar Export", type="secondary"):
+                st.session_state.current_step = 'export'
+                st.rerun()
 
 def show_export_section():
     """Show export section with multiple export options"""

@@ -736,31 +736,149 @@ Respond in JSON format (IN DUTCH):
 
 def generate_final_clause(prompt, complete_info, research_data, source_content, model):
     """Generate the final clause with complete information"""
-    # Build comprehensive context
-    info_context = "\n\nCOMPLETE INFORMATION SET:\n"
     
-    # Include original research findings
-    info_context += "\nFROM RESEARCH:\n"
-    for key, data in research_data.get('found_information', {}).items():
-        info_context += f"- {key}: {data['value']}\n"
+    # First, check if the prompt contains template markers
+    has_template = '{{' in prompt and '}}' in prompt
     
-    # Include compiled information
-    info_context += "\nFROM COMPILATION:\n"
-    for key, data in complete_info.get('complete_information', {}).items():
-        info_context += f"- {key}: {data['value']} (bron: {data['source']})\n"
-    
-    # Include excluded conditions
-    excluded_conditions = complete_info.get('excluded_conditions', [])
-    if excluded_conditions:
-        info_context += "\nEXCLUDED CONDITIONS (DO NOT GENERATE):\n"
-        for condition in excluded_conditions:
-            info_context += f"- {condition}\n"
-    
-    # Get applicable scenario from research or review
-    applicable_scenario = research_data.get('applicable_scenario', '')
-    research_summary = research_data.get('research_summary', '')
-    
-    final_prompt = f"""Generate a complete legal clause based on the following:
+    if has_template:
+        # This is a template-based prompt, we need to fill in the placeholders
+        
+        # Extract all required placeholders from the prompt
+        import re
+        placeholders = re.findall(r'\{\{([^}]+)\}\}', prompt)
+        
+        # Build a mapping of placeholder values from all available information
+        placeholder_values = {}
+        
+        # Get values from research data
+        for key, data in research_data.get('found_information', {}).items():
+            if isinstance(data, dict) and 'value' in data:
+                placeholder_values[key] = data['value']
+        
+        # Get values from complete_info
+        for key, data in complete_info.get('complete_information', {}).items():
+            if isinstance(data, dict) and 'value' in data:
+                placeholder_values[key] = data['value']
+        
+        # Get values from notarial_info (for standard fields)
+        if 'notarial_info' in st.session_state:
+            notarial = st.session_state.notarial_info
+            
+            # Map notarial fields to placeholder names
+            field_mapping = {
+                'repertorium_number': notarial.get('repertorium_nummer', ''),
+                'day_and_month': '',  # Will be calculated below
+                'NOTARY_NAME': notarial.get('notary_name', ''),
+                'NOTARY_LOCATION': notarial.get('notary_location', ''),
+                'NOTARY_OFFICE_ADDRESS': notarial.get('notary_office_address', ''),
+                'DOSSIER_NUMBER': notarial.get('dossier_nummer', notarial.get('repertorium_nummer', '')),
+            }
+            
+            # Calculate day_and_month from ondertekening_datum
+            if notarial.get('ondertekening_datum'):
+                try:
+                    date_str = notarial['ondertekening_datum']
+                    # Convert to Dutch format
+                    day = notarial.get('ondertekening_dag', '')
+                    month_nl = notarial.get('ondertekening_maand_nl', '')
+                    if day and month_nl:
+                        # Convert day number to Dutch words
+                        dutch_days = {
+                            1: "één", 2: "twee", 3: "drie", 4: "vier", 5: "vijf",
+                            6: "zes", 7: "zeven", 8: "acht", 9: "negen", 10: "tien",
+                            11: "elf", 12: "twaalf", 13: "dertien", 14: "veertien", 15: "vijftien",
+                            16: "zestien", 17: "zeventien", 18: "achttien", 19: "negentien", 20: "twintig",
+                            21: "eenentwintig", 22: "tweeëntwintig", 23: "drieëntwintig", 24: "vierentwintig",
+                            25: "vijfentwintig", 26: "zesentwintig", 27: "zevenentwintig", 28: "achtentwintig",
+                            29: "negenentwintig", 30: "dertig", 31: "eenendertig"
+                        }
+                        day_text = dutch_days.get(int(day), str(day))
+                        field_mapping['day_and_month'] = f"{day_text} {month_nl}"
+                except:
+                    pass
+            
+            # Add mapped values to placeholder_values
+            for placeholder, value in field_mapping.items():
+                if value and placeholder not in placeholder_values:
+                    placeholder_values[placeholder] = value
+        
+        # Now use the model to process the template with the found information
+        template_prompt = f"""You are processing a notarial clause template. Your task is to:
+
+1. Take the template with placeholders and conditional blocks
+2. Fill in the placeholders with the provided information
+3. Process conditional blocks based on the conditions
+
+TEMPLATE TO PROCESS:
+{prompt}
+
+AVAILABLE INFORMATION:
+{json.dumps(placeholder_values, ensure_ascii=False, indent=2)}
+
+ADDITIONAL CONTEXT:
+- Videoconferentie: {'Ja' if st.session_state.notarial_info.get('videoconferentie', False) else 'Nee'}
+- Research Summary: {research_data.get('research_summary', '')}
+
+CRITICAL INSTRUCTIONS:
+1. Replace ALL {{{{placeholder}}}} with the corresponding values from the available information
+2. For [BLOCK] sections:
+   - [NOTARY_HEADER] ... [/NOTARY_HEADER]: ALWAYS include this block with filled values
+   - [IF_REMOTE_NOTARY] ... [/IF_REMOTE_NOTARY]: Include ONLY if videoconferentie is 'Ja', otherwise remove entirely
+3. If a placeholder value is not found, leave it as {{{{placeholder}}}} for manual filling
+4. Do NOT add any extra text or explanations
+5. Preserve all original formatting and line breaks
+6. Remove the [BLOCK] tags but keep the content when including a block
+7. When removing a conditional block, remove it entirely including tags
+
+OUTPUT: The processed template with all placeholders filled and conditional blocks processed."""
+
+        response = model.generate_content(template_prompt)
+        
+        # Clean up the response
+        cleaned_text = response.text.strip()
+        
+        # Additional cleanup to ensure no block markers remain when they should be removed
+        if not st.session_state.notarial_info.get('videoconferentie', False):
+            # Remove any remaining IF_REMOTE_NOTARY blocks
+            cleaned_text = re.sub(r'\[IF_REMOTE_NOTARY\].*?\[/IF_REMOTE_NOTARY\]', '', cleaned_text, flags=re.DOTALL)
+        
+        # Remove any remaining block tags (but keep content for included blocks)
+        cleaned_text = re.sub(r'\[NOTARY_HEADER\]', '', cleaned_text)
+        cleaned_text = re.sub(r'\[/NOTARY_HEADER\]', '', cleaned_text)
+        cleaned_text = re.sub(r'\[IF_REMOTE_NOTARY\]', '', cleaned_text)
+        cleaned_text = re.sub(r'\[/IF_REMOTE_NOTARY\]', '', cleaned_text)
+        
+        # Clean up extra whitespace
+        cleaned_text = re.sub(r'\n\s*\n\s*\n', '\n\n', cleaned_text)
+        
+        return cleaned_text
+        
+    else:
+        # This is a non-template prompt, use the original generation logic
+        info_context = "\n\nCOMPLETE INFORMATION SET:\n"
+        
+        # Include original research findings
+        info_context += "\nFROM RESEARCH:\n"
+        for key, data in research_data.get('found_information', {}).items():
+            info_context += f"- {key}: {data['value']}\n"
+        
+        # Include compiled information
+        info_context += "\nFROM COMPILATION:\n"
+        for key, data in complete_info.get('complete_information', {}).items():
+            info_context += f"- {key}: {data['value']} (bron: {data['source']})\n"
+        
+        # Include excluded conditions
+        excluded_conditions = complete_info.get('excluded_conditions', [])
+        if excluded_conditions:
+            info_context += "\nEXCLUDED CONDITIONS (DO NOT GENERATE):\n"
+            for condition in excluded_conditions:
+                info_context += f"- {condition}\n"
+        
+        # Get applicable scenario from research or review
+        applicable_scenario = research_data.get('applicable_scenario', '')
+        research_summary = research_data.get('research_summary', '')
+        
+        final_prompt = f"""Generate a complete legal clause based on the following:
 
 ORIGINAL PROMPT:
 {prompt}
@@ -793,20 +911,20 @@ Create a legally sound clause using ONLY the applicable information based on the
 If the entire clause depends on an excluded condition, return an appropriate message explaining why the clause cannot be generated.
 Ensure the clause is complete, clear, and professionally written in Dutch."""
 
-    response = model.generate_content(final_prompt)
-    
-    # Clean up the response
-    cleaned_text = response.text
-    
-    # Remove block indicators using regex
-    cleaned_text = re.sub(r'\[BLOCK\s+[^\]]+\]', '', cleaned_text)
-    cleaned_text = re.sub(r'\[/BLOCK\]', '', cleaned_text)
-    
-    # Clean up any extra whitespace
-    cleaned_text = re.sub(r'\n\s*\n', '\n\n', cleaned_text)
-    cleaned_text = cleaned_text.strip()
-    
-    return cleaned_text
+        response = model.generate_content(final_prompt)
+        
+        # Clean up the response
+        cleaned_text = response.text
+        
+        # Remove block indicators using regex
+        cleaned_text = re.sub(r'\[BLOCK\s+[^\]]+\]', '', cleaned_text)
+        cleaned_text = re.sub(r'\[/BLOCK\]', '', cleaned_text)
+        
+        # Clean up any extra whitespace
+        cleaned_text = re.sub(r'\n\s*\n', '\n\n', cleaned_text)
+        cleaned_text = cleaned_text.strip()
+        
+        return cleaned_text
 
 # ============= STREAMLIT UI FUNCTIONS =============
 

@@ -1317,7 +1317,7 @@ def show_clause_processor():
                 st.text_area("", value=content, height=200, key=f"processed_{clause_name}")
 
 def process_clause_workflow():
-    """Handle the multi-stage clause processing workflow with proper feedback display"""
+    """Handle the multi-stage clause processing workflow with enhanced agent feedback display"""
     state = st.session_state.processing_state
     
     if not state:
@@ -1339,6 +1339,12 @@ def process_clause_workflow():
     # Initialize model with correct version
     model = genai.GenerativeModel('gemini-2.5-flash-lite')
     
+    # Add debug console at the top of processing
+    with st.expander("🔧 Debug Console", expanded=True):
+        st.caption(f"Current Stage: {state['stage']}")
+        st.caption(f"Clause: {state['clause_name']} (#{state['row_number']})")
+        st.caption(f"Processing started at: {datetime.now().strftime('%H:%M:%S')}")
+    
     # Stage 1: Applicability Check
     if state['stage'] == 'applicability':
         st.info(f"🤖 Verwerking van: **{state['clause_name']}**")
@@ -1347,41 +1353,63 @@ def process_clause_workflow():
         
         if is_essential_clause:
             st.success("✅ ESSENTIËLE CLAUSULE - wordt altijd toegepast")
+            
+            # Log to debug console
+            with st.expander("🔍 Applicability Agent Log", expanded=True):
+                st.code(f"""
+AGENT: Applicability Check
+TIME: {datetime.now().strftime('%H:%M:%S')}
+DECISION: Auto-apply (Essential Clause)
+CLAUSE NUMBER: {state['row_number']}
+REASON: Clause is in ESSENTIAL_CLAUSES list
+                """)
+            
             state['user_decision'] = 'apply'
             state['stage'] = 'research'
             st.rerun()
         else:
             with st.spinner("⚖️ Controleren of clausule van toepassing is..."):
+                start_time = time.time()
                 may_skip, analysis = check_clause_applicability(
                     prompt, clause_type, skip_conditions, 
                     st.session_state.source_content, 
                     st.session_state.notarial_info, 
                     model
                 )
+                execution_time = time.time() - start_time
+            
+            # Enhanced display with agent raw response
+            with st.expander("🔍 APPLICABILITY AGENT - Raw Response", expanded=True):
+                st.code(analysis)
+                st.caption(f"⏱️ Execution time: {execution_time:.2f} seconds")
             
             # Show detailed analysis in structured format
             st.subheader("⚖️ Applicability Agent Analyse")
             
-            # Parse the analysis to show structured output
-            if "FINALE BESLISSING:" in analysis:
-                # Extract key parts
-                lines = analysis.split('\n')
-                for line in lines:
-                    if "CLAUSULE:" in line:
-                        st.write(f"**{line.strip()}**")
-                    elif "CATEGORIE:" in line:
-                        st.info(line.strip())
-                    elif "FINALE BESLISSING:" in line:
-                        if "JA" in line:
-                            st.error(f"🚫 {line.strip()}")
-                        else:
-                            st.success(f"✅ {line.strip()}")
-                    elif "REDENERING:" in line:
-                        st.write(f"**{line.strip()}**")
+            # Create columns for structured display
+            col1, col2 = st.columns([3, 1])
             
-            # Show full analysis in expander
-            with st.expander("📋 Volledige Analyse", expanded=False):
-                st.text(analysis)
+            with col1:
+                # Parse the analysis to show structured output
+                if "FINALE BESLISSING:" in analysis:
+                    # Extract key parts
+                    lines = analysis.split('\n')
+                    for line in lines:
+                        if "CLAUSULE:" in line:
+                            st.write(f"**{line.strip()}**")
+                        elif "CATEGORIE:" in line:
+                            st.info(line.strip())
+                        elif "FINALE BESLISSING:" in line:
+                            if "JA" in line:
+                                st.error(f"🚫 {line.strip()}")
+                            else:
+                                st.success(f"✅ {line.strip()}")
+                        elif "REDENERING:" in line:
+                            st.write(f"**{line.strip()}**")
+            
+            with col2:
+                # Agent decision summary
+                st.metric("AI Advies", "Skip" if may_skip else "Keep")
             
             st.warning(f"De AI adviseert: {'Clausule MAG verwijderd worden' if may_skip else 'Clausule MOET behouden blijven'}")
             
@@ -1399,19 +1427,42 @@ def process_clause_workflow():
     
     # Stage 2: Research
     elif state['stage'] == 'research':
+        st.header("🔬 RESEARCH AGENT")
+        
         with st.spinner("🔬 Research Agent analyseert informatie behoeften..."):
+            start_time = time.time()
             research_data = research_agent_determine_needs(
                 prompt, clause_type, st.session_state.source_content, model
             )
+            execution_time = time.time() - start_time
             state['research_data'] = research_data
         
-        # Show detailed research results
+        # Show raw research data for debugging
+        with st.expander("🔍 RESEARCH AGENT - Raw JSON Response", expanded=True):
+            st.json(research_data)
+            st.caption(f"⏱️ Execution time: {execution_time:.2f} seconds")
+        
+        # Log structured info
+        with st.expander("📊 RESEARCH AGENT - Analysis Log", expanded=True):
+            st.code(f"""
+AGENT: Research
+TIME: {datetime.now().strftime('%H:%M:%S')}
+EXECUTION TIME: {execution_time:.2f}s
+APPLICABLE SCENARIO: {research_data.get('applicable_scenario', 'Unknown')}
+REQUIRED ITEMS: {len(research_data.get('required_information', []))}
+FOUND ITEMS: {len(research_data.get('found_information', {}))}
+MISSING ITEMS: {len(research_data.get('missing_information', []))}
+
+RESEARCH SUMMARY:
+{research_data.get('research_summary', 'No summary provided')}
+            """)
+        
         st.success("✅ Research compleet!")
         st.subheader("🔬 Research Agent Resultaten")
         
         # Show the applicable scenario prominently
         if research_data.get('applicable_scenario') and research_data['applicable_scenario'] != 'Unknown':
-            st.info(f"**📍 Applicable Scenario:** {research_data['applicable_scenario']}")
+            st.info(f"**🎯 Applicable Scenario:** {research_data['applicable_scenario']}")
         
         # Show research summary
         if research_data.get('research_summary'):
@@ -1427,27 +1478,30 @@ def process_clause_workflow():
         with col3:
             st.metric("❌ Missing Info", len(research_data.get('missing_information', [])))
         
-        # Show found information details
+        # Show found information details with confidence scores
         if research_data.get('found_information'):
-            with st.expander("✅ Gevonden Informatie", expanded=True):
+            with st.expander("✅ Gevonden Informatie - Detailed", expanded=True):
                 for key, info in research_data['found_information'].items():
-                    col1, col2 = st.columns([2, 1])
-                    with col1:
-                        st.write(f"**{key}:** {info['value']}")
-                    with col2:
-                        confidence_color = "green" if info['confidence'] == 'HIGH' else "orange" if info['confidence'] == 'MEDIUM' else "red"
-                        st.markdown(f"<span style='color: {confidence_color}'>Confidence: {info['confidence']}</span>", unsafe_allow_html=True)
-                    
-                    if info.get('source_quote'):
-                        st.caption(f"📖 Bron: \"{info['source_quote'][:100]}...\"")
+                    with st.container():
+                        col1, col2 = st.columns([3, 1])
+                        with col1:
+                            st.write(f"**{key}:** `{info['value']}`")
+                            if info.get('source_quote'):
+                                st.caption(f"📖 Bron: \"{info['source_quote'][:150]}...\"")
+                        with col2:
+                            confidence_color = {"HIGH": "🟢", "MEDIUM": "🟡", "LOW": "🔴"}.get(info['confidence'], "⚪")
+                            st.write(f"{confidence_color} {info['confidence']}")
+                        st.divider()
         
         # Show missing information details
         if research_data.get('missing_information'):
-            with st.expander("❌ Ontbrekende Informatie", expanded=True):
-                for item in research_data['missing_information']:
-                    st.write(f"• **{item['item']}** - {item['required_for']}")
+            with st.expander("❌ Ontbrekende Informatie - Detailed", expanded=True):
+                for idx, item in enumerate(research_data['missing_information'], 1):
+                    st.write(f"**{idx}. {item['item']}**")
+                    st.write(f"   • Required for: {item['required_for']}")
                     if item.get('searched_terms'):
-                        st.caption(f"  Gezocht naar: {', '.join(item['searched_terms'])}")
+                        st.write(f"   • Searched: `{', '.join(item['searched_terms'])}`")
+                    st.divider()
         
         state['stage'] = 'review'
         time.sleep(1)  # Give user time to see results
@@ -1455,11 +1509,36 @@ def process_clause_workflow():
     
     # Stage 3: Review
     elif state['stage'] == 'review':
+        st.header("📋 REVIEW AGENT")
+        
         with st.spinner("📋 Review Agent bepaalt wat nog nodig is..."):
+            start_time = time.time()
             review_result = review_agent_check(
                 prompt, state['research_data'], clause_type, model
             )
+            execution_time = time.time() - start_time
             state['review_result'] = review_result
+        
+        # Show raw review data
+        with st.expander("🔍 REVIEW AGENT - Raw JSON Response", expanded=True):
+            st.json(review_result)
+            st.caption(f"⏱️ Execution time: {execution_time:.2f} seconds")
+        
+        # Log structured review info
+        with st.expander("📊 REVIEW AGENT - Analysis Log", expanded=True):
+            st.code(f"""
+AGENT: Review
+TIME: {datetime.now().strftime('%H:%M:%S')}
+EXECUTION TIME: {execution_time:.2f}s
+APPLICABLE SCENARIO: {review_result.get('applicable_scenario', 'Unknown')}
+ALREADY FOUND: {len(review_result.get('already_found', []))}
+CRITICAL MISSING: {len(review_result.get('critical_missing', []))}
+CAN PROCEED WITHOUT: {len(review_result.get('can_proceed_without', []))}
+NOT APPLICABLE: {len(review_result.get('not_applicable_info', []))}
+
+ANALYSIS:
+{review_result.get('analysis', 'No analysis provided')}
+            """)
         
         st.subheader("📊 Review Agent Analyse")
         
@@ -1467,24 +1546,42 @@ def process_clause_workflow():
         if review_result.get('analysis'):
             st.info(f"**Analyse:** {review_result['analysis']}")
         
-        # Show what was already found
-        if review_result.get('already_found'):
-            with st.expander("✅ Reeds gevonden informatie", expanded=False):
-                for item in review_result['already_found']:
+        # Show categorized information
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            with st.expander(f"✅ Already Found ({len(review_result.get('already_found', []))})", expanded=False):
+                for item in review_result.get('already_found', []):
                     st.write(f"• {item}")
         
-        # Show what's not applicable
-        if review_result.get('not_applicable_info'):
-            with st.expander("ℹ️ Niet van toepassing voor dit scenario", expanded=False):
-                for item in review_result['not_applicable_info']:
+        with col2:
+            with st.expander(f"ℹ️ Not Applicable ({len(review_result.get('not_applicable_info', []))})", expanded=False):
+                for item in review_result.get('not_applicable_info', []):
                     st.write(f"• {item}")
         
-        # Show critical missing info
+        with col3:
+            with st.expander(f"🤷 Can Proceed Without ({len(review_result.get('can_proceed_without', []))})", expanded=False):
+                for item in review_result.get('can_proceed_without', []):
+                    st.write(f"• {item}")
+        
+        # Show critical missing info prominently
         if review_result.get('critical_missing'):
             st.warning(f"❓ Er zijn {len(review_result['critical_missing'])} kritieke informatie items nodig")
             with st.expander("🔍 Kritieke ontbrekende informatie", expanded=True):
-                for item in review_result['critical_missing']:
-                    st.write(f"• **{item}**")
+                for idx, item in enumerate(review_result['critical_missing'], 1):
+                    st.write(f"**{idx}. {item}**")
+            
+            # Show questions that will be asked
+            if review_result.get('questions_for_user'):
+                with st.expander("❓ Questions to Ask User", expanded=True):
+                    for idx, q in enumerate(review_result['questions_for_user'], 1):
+                        st.write(f"**Question {idx}:**")
+                        st.write(f"  • Missing: {q['missing_info']}")
+                        st.write(f"  • Question: {q['question']}")
+                        st.write(f"  • Importance: {q['importance']}")
+                        if q.get('options'):
+                            st.write(f"  • Options: {', '.join(q['options'])}")
+                        st.divider()
             
             state['questions'] = review_result.get('questions_for_user', [])
             state['current_question_index'] = 0
@@ -1496,29 +1593,52 @@ def process_clause_workflow():
         time.sleep(1)  # Give user time to see results
         st.rerun()
     
-    # Stage 4: Questions (keep existing implementation)
+    # Stage 4: Questions with enhanced search feedback
     elif state['stage'] == 'questions':
-        # ... (keep existing question handling code)
         if state['current_question_index'] < len(state['questions']):
             current_q = state['questions'][state['current_question_index']]
             
             st.subheader(f"❓ Vraag {state['current_question_index'] + 1} van {len(state['questions'])}")
             
+            # Show what we're looking for
+            st.info(f"🔍 Looking for: **{current_q['missing_info']}**")
+            
             # Try focused search first
             with st.spinner(f"🔍 Zoeken naar: {current_q['missing_info']}..."):
+                start_time = time.time()
                 focused_result = focused_search_for_missing_info(
                     current_q['missing_info'], 
                     st.session_state.source_content,
                     st.session_state.notarial_info,
                     model
                 )
+                execution_time = time.time() - start_time
+            
+            # Show focused search results
+            with st.expander("🔍 FOCUSED SEARCH - Results", expanded=True):
+                if focused_result:
+                    st.json(focused_result)
+                    st.caption(f"⏱️ Search time: {execution_time:.2f} seconds")
+                    
+                    # Log search details
+                    st.code(f"""
+SEARCH TARGET: {current_q['missing_info']}
+FOUND IN: {focused_result.get('found_in', 'not_found')}
+SEARCH NOTES: {focused_result.get('search_notes', 'No notes')}
+                    """)
+                else:
+                    st.error("Search failed - no results")
             
             found_automatically = False
             if focused_result and focused_result.get('found_items'):
                 for item_key, item_data in focused_result['found_items'].items():
                     if item_data.get('found') and item_data.get('value'):
-                        st.success(f"✅ Automatisch gevonden: {item_data['value']}")
-                        st.caption(f"📍 Gevonden in: {item_data.get('location', 'N/A')}")
+                        st.success(f"✅ Automatisch gevonden: **{item_data['value']}**")
+                        
+                        with st.expander("📍 Found Context", expanded=False):
+                            st.write(f"**Location:** {item_data.get('location', 'N/A')}")
+                            st.write(f"**Context:** {item_data.get('context', 'N/A')}")
+                            st.write(f"**Confidence:** {item_data.get('confidence', 'N/A')}")
                         
                         # Store the answer
                         answer_key = f"{clause_type}_{current_q['missing_info']}"
@@ -1595,9 +1715,11 @@ def process_clause_workflow():
             state['stage'] = 'generation'
             st.rerun()
     
-    # Stage 5: Generation
+    # Stage 5: Generation with enhanced compilation feedback
     elif state['stage'] == 'generation':
-        st.info("📝 Genereren van clausule...")
+        st.header("🏗️ GENERATION PHASE")
+        
+        st.info("🔨 Genereren van clausule...")
         
         # Show what information will be used
         st.subheader("🔧 Compilatie van informatie")
@@ -1618,6 +1740,7 @@ def process_clause_workflow():
         
         # Create complete information set
         with st.spinner("🔧 Compileren van informatie..."):
+            start_time = time.time()
             if clause_user_answers:
                 complete_info = create_complete_information_set(
                     state['research_data'], 
@@ -1640,18 +1763,38 @@ def process_clause_workflow():
                             "source": "research",
                             "confidence": data.get('confidence', 'HIGH')
                         }
+            execution_time = time.time() - start_time
         
         # Show compilation results
+        with st.expander("🔧 COMPILATION AGENT - Results", expanded=True):
+            st.json(complete_info)
+            st.caption(f"⏱️ Compilation time: {execution_time:.2f} seconds")
+        
+        # Show compilation log
+        with st.expander("📊 COMPILATION AGENT - Log", expanded=True):
+            st.code(f"""
+AGENT: Compilation
+TIME: {datetime.now().strftime('%H:%M:%S')}
+EXECUTION TIME: {execution_time:.2f}s
+READY FOR GENERATION: {complete_info.get('ready_for_generation', False)}
+COMPLETE INFO ITEMS: {len(complete_info.get('complete_information', {}))}
+EXCLUDED CONDITIONS: {len(complete_info.get('excluded_conditions', []))}
+
+COMPILATION NOTES:
+{complete_info.get('compilation_notes', 'No notes')}
+            """)
+        
         if complete_info.get('compilation_notes'):
             st.info(f"📝 {complete_info['compilation_notes']}")
         
         if complete_info.get('excluded_conditions'):
-            with st.expander("🚫 Excluded Conditions"):
+            with st.expander("🚫 Excluded Conditions", expanded=True):
                 for condition in complete_info['excluded_conditions']:
                     st.write(f"• {condition}")
         
         # Generate final clause
-        with st.spinner("✍️ Genereren van finale clausule..."):
+        with st.spinner("✏️ Genereren van finale clausule..."):
+            start_time = time.time()
             final_clause = generate_final_clause(
                 prompt, 
                 complete_info, 
@@ -1659,6 +1802,18 @@ def process_clause_workflow():
                 st.session_state.source_content, 
                 model
             )
+            generation_time = time.time() - start_time
+        
+        # Log generation details
+        with st.expander("✏️ GENERATION AGENT - Log", expanded=True):
+            st.code(f"""
+AGENT: Final Generation
+TIME: {datetime.now().strftime('%H:%M:%S')}
+EXECUTION TIME: {generation_time:.2f}s
+CLAUSE LENGTH: {len(final_clause)} characters
+TEMPLATE DETECTED: {'Yes' if '{{' in prompt else 'No'}
+SCENARIO: {state['research_data'].get('applicable_scenario', 'Unknown')}
+            """)
         
         st.success("✅ Clausule succesvol gegenereerd!")
         
@@ -1668,6 +1823,18 @@ def process_clause_workflow():
         # Show the result with syntax highlighting
         st.subheader("📄 Gegenereerde Clausule")
         st.text_area("", value=final_clause, height=300, key="generated_clause")
+        
+        # Show generation statistics
+        with st.expander("📊 Processing Statistics", expanded=False):
+            total_time = sum([
+                execution_time for execution_time in [
+                    generation_time,
+                    execution_time if 'execution_time' in locals() else 0
+                ]
+            ])
+            st.write(f"**Total processing time:** {total_time:.2f} seconds")
+            st.write(f"**Clause length:** {len(final_clause)} characters")
+            st.write(f"**Information sources used:** Research + {len(clause_user_answers)} user inputs")
         
         # Option to edit
         if st.checkbox("✏️ Clausule bewerken"):
@@ -1680,18 +1847,32 @@ def process_clause_workflow():
         time.sleep(1)
         st.rerun()
     
-    # Stage 6: Complete
+    # Stage 6: Complete with summary
     elif state['stage'] == 'complete':
         if state['user_decision'] == 'skip':
-            st.info("⏭️ Clausule overgeslagen op gebruikersbeslissing")
+            st.info("⭕️ Clausule overgeslagen op gebruikersbeslissing")
         else:
             st.success(f"✅ Clausule '{state['clause_name']}' verwerkt en opgeslagen!")
             
-            # Show summary of what was processed
-            with st.expander("📊 Verwerkingssamenvatting"):
+            # Show comprehensive processing summary
+            with st.expander("📊 Complete Processing Summary", expanded=True):
                 st.write(f"**Clausule:** {state['clause_name']}")
+                st.write(f"**Clause Number:** {state['row_number']}")
                 st.write(f"**Applicable Scenario:** {state.get('research_data', {}).get('applicable_scenario', 'N/A')}")
-                st.write(f"**Gebruikersbeslissing:** {'Toegepast' if state['user_decision'] == 'apply' else 'Overgeslagen'}")
+                st.write(f"**User Decision:** {'Applied' if state['user_decision'] == 'apply' else 'Skipped'}")
+                
+                # Show agent chain summary
+                st.divider()
+                st.write("**Agent Chain Executed:**")
+                st.write("1. ⚖️ Applicability Agent → Determined if clause should be included")
+                if state['user_decision'] == 'apply':
+                    st.write("2. 🔬 Research Agent → Found information in documents")
+                    st.write("3. 📋 Review Agent → Identified missing information")
+                    if state.get('questions'):
+                        st.write("4. 🔍 Focused Search Agent → Attempted to find missing info")
+                        st.write("5. ❓ User Input → Collected remaining information")
+                    st.write("6. 🔧 Compilation Agent → Combined all information")
+                    st.write("7. ✏️ Generation Agent → Created final clause")
         
         # Clear processing state
         st.session_state.processing_state = {}
@@ -1704,6 +1885,30 @@ def process_clause_workflow():
             if st.button("💾 Ga naar Export", type="secondary"):
                 st.session_state.current_step = 'export'
                 st.rerun()
+
+# Also add this helper function to display agent chain status
+def show_agent_chain_status():
+    """Display the current status of the agent chain"""
+    if 'processing_state' in st.session_state and st.session_state.processing_state:
+        state = st.session_state.processing_state
+        
+        # Define agent chain
+        agents = [
+            ("⚖️ Applicability", state['stage'] in ['applicability', 'research', 'review', 'questions', 'generation', 'complete']),
+            ("🔬 Research", state['stage'] in ['research', 'review', 'questions', 'generation', 'complete'] and state.get('user_decision') == 'apply'),
+            ("📋 Review", state['stage'] in ['review', 'questions', 'generation', 'complete'] and state.get('user_decision') == 'apply'),
+            ("🔍 Search & Input", state['stage'] in ['questions', 'generation', 'complete'] and state.get('questions')),
+            ("🔧 Compilation", state['stage'] in ['generation', 'complete'] and state.get('user_decision') == 'apply'),
+            ("✏️ Generation", state['stage'] in ['generation', 'complete'] and state.get('user_decision') == 'apply'),
+        ]
+        
+        with st.sidebar:
+            st.subheader("🔗 Agent Chain Progress")
+            for agent_name, is_complete in agents:
+                if is_complete:
+                    st.success(f"✅ {agent_name}")
+                else:
+                    st.info(f"⏳ {agent_name}")
 
 def show_export_section():
     """Show export section with multiple export options"""

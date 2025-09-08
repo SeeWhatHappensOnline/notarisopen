@@ -17,12 +17,16 @@ from datetime import datetime
 import re
 import tempfile
 
+APP_VERSION = "1.0.1"  # Change this to track versions
+
+
+
 # Load environment variables
 load_dotenv()
 
 # Configure page
 st.set_page_config(
-    page_title="Notariële Clausule Processor",
+    page_title=f"Notariële Clausule Processor v{APP_VERSION}",
     page_icon="🏛️",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -744,7 +748,6 @@ def generate_final_clause(prompt, complete_info, research_data, source_content, 
         # This is a template-based prompt, we need to fill in the placeholders
         
         # Extract all required placeholders from the prompt
-        import re
         placeholders = re.findall(r'\{\{([^}]+)\}\}', prompt)
         
         # Build a mapping of placeholder values from all available information
@@ -961,8 +964,9 @@ def main():
     if not check_password():
         st.stop()  # Do not continue if check_password is not True
     
-        st.title("🏛️ Notariële Clausule Processor")
-        st.markdown("Automatische verwerking van notariële clausules met AI")
+    st.title(f"🏛️ Notariële Clausule Processor v{APP_VERSION}")
+    st.markdown("Automatische verwerking van notariële clausules met AI")
+    st.caption(f"Version: {APP_VERSION} - Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
     
     # Sidebar for navigation
     with st.sidebar:
@@ -1333,7 +1337,7 @@ def process_clause_workflow():
         skip_conditions = row.get('skip_conditions', '')
     
     # Initialize model with correct version
-    model = genai.GenerativeModel('gemini-2.0-flash-exp')
+    model = genai.GenerativeModel('gemini-2.5-flash-lite')
     
     # Stage 1: Applicability Check
     if state['stage'] == 'applicability':

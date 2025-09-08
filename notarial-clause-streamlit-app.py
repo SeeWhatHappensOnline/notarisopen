@@ -17,7 +17,7 @@ from datetime import datetime
 import re
 import tempfile
 
-APP_VERSION = "1.0.1"  # Change this to track versions
+APP_VERSION = "1.0.2"  # Change this to track versions
 
 
 

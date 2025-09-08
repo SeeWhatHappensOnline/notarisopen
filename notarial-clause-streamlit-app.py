@@ -612,7 +612,7 @@ SEARCH IN TWO PLACES:
 {notarial_text}
 
 --- SOURCE DOCUMENTS TO SEARCH ---
-{source_content[:12000]}
+{source_content[:45000]}
 
 CRITICAL CONTEXT FOR NOTARIAL TERMS:
 - "day_and_month" or "dag en maand" = the day and month from the ondertekening_datum (signing date)

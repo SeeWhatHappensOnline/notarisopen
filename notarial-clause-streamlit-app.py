@@ -199,7 +199,431 @@ def extract_info_from_documents(source_content):
     except Exception as e:
         st.warning(f"Automatische extractie gefaald: {str(e)}")
         return {}
+        
+def parse_extracted_data_for_form(extracted_data):
+    """Parse extracted data with confidence scores into simple values for form pre-filling"""
+    form_data = {}
+    
+    # Helper to extract value if confidence is high enough
+    def get_confident_value(data_dict, min_confidence=70):
+        if isinstance(data_dict, dict) and 'value' in data_dict:
+            if data_dict.get('confidence', 0) >= min_confidence and data_dict['value'] != 'NOT_FOUND':
+                return data_dict['value']
+        return None
+    
+    # Extract general info
+    if 'algemene_info' in extracted_data:
+        datum = get_confident_value(extracted_data['algemene_info'].get('ondertekening_datum', {}))
+        if datum:
+            try:
+                # Parse the date string to a datetime object
+                date_obj = datetime.strptime(datum, "%d-%m-%Y")
+                form_data['signing_date'] = date_obj
+            except:
+                pass
+        
+        video = get_confident_value(extracted_data['algemene_info'].get('videoconferentie', {}))
+        if video is not None:
+            form_data['video_conf'] = video
+    
+    # Extract transaction info
+    if 'transactie_info' in extracted_data:
+        verkoper = get_confident_value(extracted_data['transactie_info'].get('verkoper_type', {}))
+        if verkoper:
+            form_data['verkoper_type'] = verkoper
+            
+        koper = get_confident_value(extracted_data['transactie_info'].get('koper_type', {}))
+        if koper:
+            form_data['koper_type'] = koper
+            
+        aankoop = get_confident_value(extracted_data['transactie_info'].get('aankoop_wijze', {}))
+        if aankoop and isinstance(aankoop, list):
+            form_data['aankoop_wijze'] = aankoop
+            
+        verkoop = get_confident_value(extracted_data['transactie_info'].get('verkoop_object', {}))
+        if verkoop and isinstance(verkoop, list):
+            form_data['verkoop_object'] = verkoop
+            
+        hist = get_confident_value(extracted_data['transactie_info'].get('historiek', {}))
+        if hist:
+            form_data['historiek'] = hist
+    
+    # Extract party counts
+    if 'aantal_partijen' in extracted_data:
+        aantal_v = get_confident_value(extracted_data['aantal_partijen'].get('aantal_verkopers', {}))
+        if aantal_v:
+            form_data['aantal_verkopers'] = int(aantal_v)
+            
+        aantal_k = get_confident_value(extracted_data['aantal_partijen'].get('aantal_kopers', {}))
+        if aantal_k:
+            form_data['aantal_kopers'] = int(aantal_k)
+    
+    # Extract parties details
+    if 'verkopers' in extracted_data:
+        form_data['verkopers'] = []
+        for verkoper_data in extracted_data['verkopers']:
+            verkoper = {}
+            for field in ['voornaam', 'achternaam', 'rijksregisternummer', 'adres', 'burgerlijke_staat', 'partner_naam']:
+                value = get_confident_value(verkoper_data.get(field, {}))
+                if value:
+                    verkoper[field] = value
+            if verkoper:  # Only add if we have some data
+                form_data['verkopers'].append(verkoper)
+    
+    if 'kopers' in extracted_data:
+        form_data['kopers'] = []
+        for koper_data in extracted_data['kopers']:
+            koper = {}
+            for field in ['voornaam', 'achternaam', 'rijksregisternummer', 'adres', 'burgerlijke_staat', 'partner_naam']:
+                value = get_confident_value(koper_data.get(field, {}))
+                if value:
+                    koper[field] = value
+            if koper:  # Only add if we have some data
+                form_data['kopers'].append(koper)
+    
+    return form_data
 
+# Then update the show_intake_form function:
+def show_intake_form():
+    """Show the intake form for notarial information"""
+    st.header("📋 Notariële Informatie Verzamelen")
+    
+    # Initialize session state for extracted data
+    if 'extracted_form_data' not in st.session_state:
+        st.session_state.extracted_form_data = {}
+    
+    # Check if we can auto-extract
+    if st.session_state.source_content:
+        if st.button("🤖 Probeer informatie automatisch te extraheren", type="secondary"):
+            with st.spinner("Analyseren van documenten..."):
+                extracted_data = extract_info_from_documents(st.session_state.source_content)
+                if extracted_data:
+                    # Parse the extracted data for form use
+                    form_data = parse_extracted_data_for_form(extracted_data)
+                    if form_data:
+                        st.session_state.extracted_form_data = form_data
+                        st.success("✅ Informatie geëxtraheerd! Controleer en vul aan waar nodig.")
+                        st.rerun()  # Rerun to show the form with pre-filled data
+                    else:
+                        st.warning("⚠️ Kon geen bruikbare informatie extraheren.")
+                else:
+                    st.error("❌ Automatische extractie mislukt.")
+    
+    # Get extracted data if available
+    extracted = st.session_state.extracted_form_data
+    
+    with st.form("intake_form"):
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.subheader("🏛️ Algemene Informatie")
+            
+            # Date picker with extracted value
+            default_date = extracted.get('signing_date', datetime.now())
+            signing_date = st.date_input(
+                "Datum ondertekening",
+                value=default_date,
+                format="DD-MM-YYYY"
+            )
+            
+            # Repertorium number (not typically extracted)
+            repertorium = st.text_input("Repertorium nummer")
+            
+            # Video conference checkbox with extracted value
+            video_conf = st.checkbox("Akte via videoconferentie?", 
+                                   value=extracted.get('video_conf', False))
+        
+        with col2:
+            st.subheader("🔑 Transactie Type")
+            
+            # Verkoper type with extracted value
+            verkoper_options = [
+                ("alleenstaande", "Een alleenstaande persoon"),
+                ("gehuwd_koppel", "Een gehuwd koppel"),
+                ("wettelijk_samenwonend", "Een wettelijk samenwonend koppel"),
+                ("feitelijk_samenwonend", "Een feitelijk samenwonend koppel"),
+                ("vennootschap", "Een vennootschap")
+            ]
+            
+            # Find default index for verkoper_type
+            default_verkoper_idx = 0
+            if 'verkoper_type' in extracted:
+                for idx, (key, _) in enumerate(verkoper_options):
+                    if key == extracted['verkoper_type']:
+                        default_verkoper_idx = idx
+                        break
+            
+            verkoper_type = st.selectbox(
+                "Wie verkoopt?",
+                options=verkoper_options,
+                format_func=lambda x: x[1],
+                index=default_verkoper_idx
+            )
+            
+            # Koper type with extracted value
+            koper_options = [
+                ("alleenstaande", "Een alleenstaande persoon"),
+                ("gehuwd_koppel", "Een gehuwd koppel"),
+                ("wettelijk_samenwonend", "Een wettelijk samenwonend koppel"),
+                ("feitelijk_samenwonend", "Een feitelijk samenwonend koppel"),
+                ("vennootschap", "Een vennootschap")
+            ]
+            
+            # Find default index for koper_type
+            default_koper_idx = 0
+            if 'koper_type' in extracted:
+                for idx, (key, _) in enumerate(koper_options):
+                    if key == extracted['koper_type']:
+                        default_koper_idx = idx
+                        break
+            
+            koper_type = st.selectbox(
+                "Wie koopt?",
+                options=koper_options,
+                format_func=lambda x: x[1],
+                index=default_koper_idx
+            )
+        
+        st.subheader("💰 Aankoop Details")
+        
+        col3, col4 = st.columns(2)
+        
+        with col3:
+            # Aankoop wijze with extracted values
+            aankoop_options = [
+                ("volle_eigendom", "In volle eigendom"),
+                ("gesplitste_aankoop", "Gesplitste aankoop (VG/BE)"),
+                ("gemeenschappelijk_vermogen", "In het gemeenschappelijk vermogen"),
+                ("eigen_onverdeelde_helft", "Elk voor de eigen onverdeelde helft"),
+                ("met_aanwas", "Met beding van aanwas"),
+                ("zonder_aanwas", "Zonder beding van aanwas")
+            ]
+            
+            # Pre-select extracted values
+            default_aankoop = []
+            if 'aankoop_wijze' in extracted:
+                for option in aankoop_options:
+                    if option[0] in extracted['aankoop_wijze']:
+                        default_aankoop.append(option)
+            
+            aankoop_wijze = st.multiselect(
+                "Hoe wordt er gekocht?",
+                options=aankoop_options,
+                format_func=lambda x: x[1],
+                default=default_aankoop
+            )
+        
+        with col4:
+            # Verkoop object with extracted values
+            verkoop_options = [
+                ("enkel_onroerend", "Enkel onroerend goed"),
+                ("met_roerend", "Onroerend + roerend goed"),
+                ("zonder_meetplan", "Zonder recent meetplan"),
+                ("met_meetplan", "Met recent meetplan")
+            ]
+            
+            # Pre-select extracted values
+            default_verkoop = []
+            if 'verkoop_object' in extracted:
+                for option in verkoop_options:
+                    if option[0] in extracted['verkoop_object']:
+                        default_verkoop.append(option)
+            
+            verkoop_object = st.multiselect(
+                "Wat wordt er verkocht?",
+                options=verkoop_options,
+                format_func=lambda x: x[1],
+                default=default_verkoop
+            )
+        
+        # Historiek with extracted value
+        historiek_options = [
+            ("zelf_gekocht", "Verkoper heeft zelf gekocht"),
+            ("via_schenking", "Verkoper kreeg via schenking"),
+            ("ouders_aan_kind", "Verkoop ouders aan kind")
+        ]
+        
+        # Find default index for historiek
+        default_hist_idx = 0
+        if 'historiek' in extracted:
+            for idx, (key, _) in enumerate(historiek_options):
+                if key == extracted['historiek']:
+                    default_hist_idx = idx
+                    break
+        
+        historiek = st.selectbox(
+            "Historiek",
+            options=historiek_options,
+            format_func=lambda x: x[1],
+            index=default_hist_idx
+        )
+        
+        # Dynamic sections for sellers and buyers with extracted data
+        st.subheader("👤 Verkopers")
+        
+        # Default number based on extracted data
+        default_aantal_verkopers = extracted.get('aantal_verkopers', 1)
+        if 'verkopers' in extracted:
+            default_aantal_verkopers = max(len(extracted['verkopers']), default_aantal_verkopers)
+        
+        aantal_verkopers = st.number_input("Aantal verkopers", 
+                                         min_value=1, 
+                                         max_value=10, 
+                                         value=default_aantal_verkopers)
+        
+        verkopers = []
+        for i in range(aantal_verkopers):
+            # Get extracted data for this verkoper if available
+            extracted_verkoper = {}
+            if 'verkopers' in extracted and i < len(extracted['verkopers']):
+                extracted_verkoper = extracted['verkopers'][i]
+            
+            with st.expander(f"Verkoper {i+1}", expanded=(i == 0)):
+                vcol1, vcol2 = st.columns(2)
+                with vcol1:
+                    voornaam = st.text_input(f"Voornaam", 
+                                           key=f"v_voornaam_{i}",
+                                           value=extracted_verkoper.get('voornaam', ''))
+                    achternaam = st.text_input(f"Achternaam", 
+                                             key=f"v_achternaam_{i}",
+                                             value=extracted_verkoper.get('achternaam', ''))
+                    rijksregister = st.text_input(f"Rijksregisternummer", 
+                                                 key=f"v_rr_{i}",
+                                                 value=extracted_verkoper.get('rijksregisternummer', ''))
+                with vcol2:
+                    adres = st.text_area(f"Adres", 
+                                       key=f"v_adres_{i}",
+                                       value=extracted_verkoper.get('adres', ''))
+                    
+                    # Burgerlijke staat with extracted value
+                    bs_options = ["ongehuwd", "gehuwd", "wettelijk samenwonend", "gescheiden", "weduwe/weduwnaar"]
+                    default_bs_idx = 0
+                    if 'burgerlijke_staat' in extracted_verkoper:
+                        for idx, option in enumerate(bs_options):
+                            if option == extracted_verkoper['burgerlijke_staat']:
+                                default_bs_idx = idx
+                                break
+                    
+                    burgerlijke_staat = st.selectbox(
+                        f"Burgerlijke staat",
+                        options=bs_options,
+                        key=f"v_bs_{i}",
+                        index=default_bs_idx
+                    )
+                    aanwezig = st.checkbox(f"Persoonlijk aanwezig?", key=f"v_aanwezig_{i}", value=True)
+                
+                verkopers.append({
+                    'volgnummer': i + 1,
+                    'voornaam': voornaam,
+                    'achternaam': achternaam,
+                    'rijksregisternummer': rijksregister,
+                    'adres': adres,
+                    'burgerlijke_staat': burgerlijke_staat,
+                    'aanwezig': aanwezig
+                })
+        
+        # Similar updates for kopers...
+        st.subheader("👥 Kopers")
+        
+        # Default number based on extracted data
+        default_aantal_kopers = extracted.get('aantal_kopers', 1)
+        if 'kopers' in extracted:
+            default_aantal_kopers = max(len(extracted['kopers']), default_aantal_kopers)
+        
+        aantal_kopers = st.number_input("Aantal kopers", 
+                                      min_value=1, 
+                                      max_value=10, 
+                                      value=default_aantal_kopers)
+        
+        kopers = []
+        for i in range(aantal_kopers):
+            # Get extracted data for this koper if available
+            extracted_koper = {}
+            if 'kopers' in extracted and i < len(extracted['kopers']):
+                extracted_koper = extracted['kopers'][i]
+            
+            with st.expander(f"Koper {i+1}", expanded=(i == 0)):
+                kcol1, kcol2 = st.columns(2)
+                with kcol1:
+                    voornaam = st.text_input(f"Voornaam", 
+                                           key=f"k_voornaam_{i}",
+                                           value=extracted_koper.get('voornaam', ''))
+                    achternaam = st.text_input(f"Achternaam", 
+                                             key=f"k_achternaam_{i}",
+                                             value=extracted_koper.get('achternaam', ''))
+                    rijksregister = st.text_input(f"Rijksregisternummer", 
+                                                 key=f"k_rr_{i}",
+                                                 value=extracted_koper.get('rijksregisternummer', ''))
+                with kcol2:
+                    adres = st.text_area(f"Adres", 
+                                       key=f"k_adres_{i}",
+                                       value=extracted_koper.get('adres', ''))
+                    
+                    # Burgerlijke staat with extracted value
+                    bs_options = ["ongehuwd", "gehuwd", "wettelijk samenwonend", "gescheiden", "weduwe/weduwnaar"]
+                    default_bs_idx = 0
+                    if 'burgerlijke_staat' in extracted_koper:
+                        for idx, option in enumerate(bs_options):
+                            if option == extracted_koper['burgerlijke_staat']:
+                                default_bs_idx = idx
+                                break
+                    
+                    burgerlijke_staat = st.selectbox(
+                        f"Burgerlijke staat",
+                        options=bs_options,
+                        key=f"k_bs_{i}",
+                        index=default_bs_idx
+                    )
+                    aanwezig = st.checkbox(f"Persoonlijk aanwezig?", key=f"k_aanwezig_{i}", value=True)
+                
+                kopers.append({
+                    'volgnummer': i + 1,
+                    'voornaam': voornaam,
+                    'achternaam': achternaam,
+                    'rijksregisternummer': rijksregister,
+                    'adres': adres,
+                    'burgerlijke_staat': burgerlijke_staat,
+                    'aanwezig': aanwezig
+                })
+        
+        submitted = st.form_submit_button("💾 Informatie Opslaan", type="primary")
+        
+        if submitted:
+            # Save to session state (rest of the code remains the same)
+            st.session_state.notarial_info = {
+                'notary_name': 'Stephane Van Roosbroek',
+                'notary_location': '2530 Boechout',
+                'notary_office_address': 'Heuvelstraat 54',
+                'ondertekening_datum': signing_date.strftime("%d-%m-%Y"),
+                'ondertekening_dag': signing_date.day,
+                'ondertekening_maand': signing_date.strftime("%B"),
+                'ondertekening_maand_nl': get_dutch_month(signing_date.month),
+                'ondertekening_jaar': signing_date.year,
+                'repertorium_nummer': repertorium,
+                'videoconferentie': video_conf,
+                'verkoper_type': verkoper_type[0],
+                'koper_type': koper_type[0],
+                'aankoop_wijze': [x[0] for x in aankoop_wijze],
+                'verkoop_object': [x[0] for x in verkoop_object],
+                'historiek': historiek[0],
+                'verkopers': verkopers,
+                'kopers': kopers,
+                'verkopers_aanwezig': [{'volgnummer': v['volgnummer'], 'aanwezig': v['aanwezig']} for v in verkopers],
+                'kopers_aanwezig': [{'volgnummer': k['volgnummer'], 'aanwezig': k['aanwezig']} for k in kopers],
+                'user_answers': {}
+            }
+            
+            # Clear extracted data after saving
+            st.session_state.extracted_form_data = {}
+            
+            st.success("✅ Informatie succesvol opgeslagen!")
+            st.balloons()
+            
+            # Auto navigate to next step
+            time.sleep(1)
+            st.session_state.current_step = 'documents'
+            st.rerun()
+            
 def format_notarial_info_as_text(info):
     """Format notarial information as text to append to source documents"""
     text = "\n\n--- NOTARIËLE INFORMATIE ---\n\n"
